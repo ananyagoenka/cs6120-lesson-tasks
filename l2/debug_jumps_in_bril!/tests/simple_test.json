@@ -1,0 +1,64 @@
+{
+  "functions": [
+    {
+      "instrs": [
+        {
+          "dest": "v0",
+          "op": "const",
+          "type": "int",
+          "value": 10
+        },
+        {
+          "args": [
+            "v0"
+          ],
+          "labels": [
+            "then",
+            "else"
+          ],
+          "op": "br"
+        },
+        {
+          "label": "then"
+        },
+        {
+          "args": [
+            "v0"
+          ],
+          "op": "print"
+        },
+        {
+          "labels": [
+            "end"
+          ],
+          "op": "jmp"
+        },
+        {
+          "label": "else"
+        },
+        {
+          "dest": "v1",
+          "op": "const",
+          "type": "int",
+          "value": 20
+        },
+        {
+          "args": [
+            "v1"
+          ],
+          "op": "print"
+        },
+        {
+          "labels": [
+            "end"
+          ],
+          "op": "jmp"
+        },
+        {
+          "label": "end"
+        }
+      ],
+      "name": "main"
+    }
+  ]
+}
