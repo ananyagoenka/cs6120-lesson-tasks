@@ -1,0 +1,1 @@
+# RUN: bril2json < simple_test.bril | python trace_jumps.py | bril2txt | diff - simple_test_transformed.bril
