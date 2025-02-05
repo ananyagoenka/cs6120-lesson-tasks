@@ -15,16 +15,16 @@ pipeline = [
     "brili -p {args}",
 ]
 
-[runs.basic_lvn]
+[runs.lvn_basic]
 pipeline = [
     "bril2json",
     "python3 ../cs6120-lesson-tasks/l3/lvn_og.py",     
     "brili -p {args}",
 ]
 
-[runs.lvn]
+[runs.lvn_opt]
 pipeline = [
     "bril2json",
-    "python3 ../cs6120-lesson-tasks/l3/lvn.py",     
+    "python3 ../cs6120-lesson-tasks/l3/lvn_opt.py",     
     "brili -p {args}",
 ]
