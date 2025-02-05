@@ -18,11 +18,10 @@ def analyze_liveness(func):
     
     for instr in func["instrs"]:
         if "args" in instr:
-            used_vars.update(instr["args"])  # ✅ Tracks arithmetic and function call args
+            used_vars.update(instr["args"]) 
         
-        # ✅ Fix: Only check "op" if it exists
-        if "op" in instr and instr["op"] == "br":  # ✅ Tracks branch conditions
-            used_vars.add(instr["args"][0])  # First argument is the condition variable
+        if "op" in instr and instr["op"] == "br":  
+            used_vars.add(instr["args"][0]) 
 
     return used_vars
 
@@ -31,7 +30,7 @@ def remove_unused_variables(func):
     Removes unused variables by working on basic blocks.
     Uses global liveness information to avoid removing needed variables.
     """
-    used_vars = analyze_liveness(func)  # ✅ Use the global liveness result
+    used_vars = analyze_liveness(func)  
 
     blocks = form_basic_blocks(func["instrs"])
     changed = False
@@ -41,19 +40,17 @@ def remove_unused_variables(func):
         for instr in block:
             dest = instr.get("dest")
 
-            # Always keep side-effecting instructions
             if has_side_effect(instr):
                 new_block.append(instr)
                 continue
 
-            # Only remove if the destination is truly unused
             if dest and dest not in used_vars:
                 changed = True
-                continue  # Skip unused assignment
+                continue  
 
             new_block.append(instr)
 
-        block[:] = new_block  # Modify block in place
+        block[:] = new_block 
 
     func["instrs"] = [instr for block in blocks for instr in block]
     return changed
@@ -71,16 +68,14 @@ def remove_shadowed_assignments(block, global_used_vars):
         args = instr.get("args", [])
         dest = instr.get("dest")
 
-        # Mark args as "used," preventing them from being deleted
         for arg in args:
             if arg in last_def:
                 del last_def[arg]
 
-        # If dest exists, check if a prior definition exists
         if dest:
             if dest in last_def and dest not in global_used_vars:
-                to_drop.add(last_def[dest])  # Mark previous definition for removal
-            last_def[dest] = i  # Update last definition
+                to_drop.add(last_def[dest]) 
+            last_def[dest] = i  
 
     # Second pass: Remove marked instructions
     new_block = [instr for i, instr in enumerate(block) if i not in to_drop]
@@ -91,22 +86,22 @@ def trivial_dce_function(func):
     Iteratively applies DCE and local optimizations until no further progress.
     """
     while True:
-        used_vars = analyze_liveness(func)  # ✅ Compute global used variables
-        changed1 = remove_unused_variables(func)  # ✅ Now correctly considers global liveness
+        used_vars = analyze_liveness(func)  
+        changed1 = remove_unused_variables(func)  
         changed2 = False
 
         blocks = form_basic_blocks(func["instrs"])
         new_instrs = []
         for block in blocks:
-            optimized_block = remove_shadowed_assignments(block, used_vars)  # ✅ Now considers global liveness
+            optimized_block = remove_shadowed_assignments(block, used_vars)  
             if optimized_block != block:
                 changed2 = True
             new_instrs.extend(optimized_block)
 
-        if not (changed1 or changed2):  # Stop when no more changes occur
+        if not (changed1 or changed2): 
             break
 
-        func["instrs"] = new_instrs  # Update function instructions
+        func["instrs"] = new_instrs  
 
 def trivial_dce(program):
     """
@@ -120,7 +115,6 @@ def main():
     program = json.load(sys.stdin)
     program = trivial_dce(program)
     json.dump(program, sys.stdout, indent=2, sort_keys=True)
-    #print()
 
 if __name__ == "__main__":
     main()

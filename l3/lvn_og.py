@@ -36,7 +36,6 @@ def lvn_block(block):
         dest = instr.get("dest")
         args = instr.get("args", [])
 
-        # Special case: Constants must be tracked separately
         if instr["op"] == "const" and "value" in instr:
             value_repr = ("const", instr["value"])
 
@@ -48,7 +47,7 @@ def lvn_block(block):
                     "type": instr["type"],
                     "args": [existing_var]
                 })
-                var2num[dest] = existing_num  # Map dest to existing constant
+                var2num[dest] = existing_num  
             else:
                 val_table[value_repr] = (next_value_number, dest)
                 var2num[dest] = next_value_number
@@ -61,16 +60,14 @@ def lvn_block(block):
                     "value": instr["value"]
                 }
                 new_block.append(new_instr)
-            continue  # Skip generic LVN processing for constants
+            continue  
 
-        # Generic LVN processing
         arg_nums = tuple(var2num.get(arg, arg) for arg in args)
         value = canonicalize((instr["op"],) + arg_nums)
 
         if value in val_table:
             existing_num, existing_var = val_table[value]
 
-            # Ensure we don't incorrectly merge distinct variables
             if dest and existing_var != dest:
                 new_block.append({
                     "op": "id",
@@ -79,13 +76,13 @@ def lvn_block(block):
                     "args": [existing_var]
                 })
             
-            var2num[dest] = existing_num  # Map dest to existing value number
+            var2num[dest] = existing_num  
         else:
             curr_num = next_value_number
             next_value_number += 1
             val_table[value] = (curr_num, dest)
             var2num[dest] = curr_num
-            num2var[curr_num] = dest  # Properly track canonical variable
+            num2var[curr_num] = dest  
 
             new_args = [num2var.get(arg, arg) for arg in arg_nums]
 
