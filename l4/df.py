@@ -3,8 +3,6 @@ import sys
 from collections import defaultdict
 from bril_cfg import form_basic_blocks, build_cfg
 
-# ------------------ Data Flow Solver ------------------
-
 class DataFlowSolver:
     def __init__(self, cfg, direction, merge, transfer, initial, gen_sets):
         self.cfg = cfg
@@ -15,7 +13,7 @@ class DataFlowSolver:
         if direction == "forward":
             self.in_sets = {b: set() for b in cfg}
             self.out_sets = {b: gen_sets[b].copy() for b in cfg}
-        else:  # backward
+        else:
             self.out_sets = {b: set() for b in cfg}
             self.in_sets = {b: gen_sets[b].copy() for b in cfg}
 
@@ -33,7 +31,7 @@ class DataFlowSolver:
                         self.out_sets[block] = new_out
                         worklist.update(self.cfg[block]["succs"])
             return self.in_sets, self.out_sets
-        else:  # backward analysis
+        else:
             worklist = set(self.cfg.keys())
             while worklist:
                 block = worklist.pop()
@@ -47,8 +45,6 @@ class DataFlowSolver:
                         worklist.update(self.cfg[block]["preds"])
             return self.in_sets, self.out_sets
 
-# ------------------ Reaching Definitions ------------------
-
 class ReachingDefinitions:
     def __init__(self, cfg, blocks):
         self.cfg = cfg
@@ -59,7 +55,6 @@ class ReachingDefinitions:
         definitions = defaultdict(set)
         kill_sets = defaultdict(set)
         all_defs = defaultdict(set)
-
         for block in self.blocks:
             label = block[0]["label"]
             for instr in block:
@@ -68,14 +63,12 @@ class ReachingDefinitions:
                     def_name = f"{var}_{label}"
                     definitions[label].add(def_name)
                     all_defs[var].add(def_name)
-
         for block in self.blocks:
             label = block[0]["label"]
             for instr in block:
                 if "dest" in instr:
                     var = instr["dest"]
                     kill_sets[label] = all_defs[var] - {f"{var}_{label}"}
-
         return definitions, kill_sets
 
     def merge(self, sets):
@@ -95,8 +88,6 @@ class ReachingDefinitions:
         )
         return solver.solve()
 
-# ------------------ Live Variables ------------------
-
 class LiveVariables:
     def __init__(self, cfg, blocks):
         self.cfg = cfg
@@ -104,7 +95,6 @@ class LiveVariables:
         self.uses, self.defs = self.extract_uses_and_defs()
 
     def extract_uses_and_defs(self):
-        # Compute use and def sets in a block-sensitive (ordered) manner.
         uses = {}
         defs = {}
         for block in self.blocks:
@@ -112,12 +102,10 @@ class LiveVariables:
             block_use = set()
             block_def = set()
             for instr in block:
-                # For each used variable, add it to use if it hasn't been defined in this block yet.
                 if "args" in instr:
                     for var in instr["args"]:
                         if var not in block_def:
                             block_use.add(var)
-                # Then, add any definition.
                 if "dest" in instr:
                     block_def.add(instr["dest"])
             uses[label] = block_use
@@ -128,21 +116,104 @@ class LiveVariables:
         return set().union(*sets)
 
     def transfer(self, block, out_set):
-        # Live variables: in[B] = use[B] ∪ (out[B] - def[B])
         return self.uses[block].union(out_set - self.defs[block])
 
     def analyze(self):
         solver = DataFlowSolver(
             cfg=self.cfg,
-            direction="backward",  # backward analysis for live variables
+            direction="backward",
             merge=self.merge,
             transfer=self.transfer,
             initial=set(),
-            gen_sets=self.uses  # initial in-sets are the block's use sets
+            gen_sets=self.uses
         )
         return solver.solve()
 
-# ------------------ Output Formatting ------------------
+BOTTOM = "⊥"
+NC = "NC"
+
+def meet_val(x, y):
+    if x == y:
+        return x
+    elif x == BOTTOM:
+        return y
+    elif y == BOTTOM:
+        return x
+    else:
+        return NC
+
+def merge_maps(maps):
+    result = {}
+    all_keys = set()
+    for m in maps:
+        all_keys |= set(m.keys())
+    for key in all_keys:
+        vals = [m.get(key, BOTTOM) for m in maps]
+        merged = vals[0]
+        for v in vals[1:]:
+            merged = meet_val(merged, v)
+        result[key] = merged
+    return result
+
+def transfer_block(block, in_map):
+    state = in_map.copy()
+    for instr in block:
+        if "dest" in instr:
+            var = instr["dest"]
+            op = instr.get("op")
+            if op == "const":
+                state[var] = instr["value"]
+            elif op in {"add", "sub", "mul", "div"}:
+                args = instr.get("args", [])
+                arg_vals = []
+                all_const = True
+                for arg in args:
+                    val = state.get(arg, BOTTOM)
+                    if isinstance(val, (int, float)):
+                        arg_vals.append(val)
+                    else:
+                        all_const = False
+                        break
+                if all_const and len(arg_vals) == len(args):
+                    if op == "add":
+                        res = arg_vals[0] + arg_vals[1]
+                    elif op == "sub":
+                        res = arg_vals[0] - arg_vals[1]
+                    elif op == "mul":
+                        res = arg_vals[0] * arg_vals[1]
+                    elif op == "div":
+                        res = arg_vals[0] // arg_vals[1] if arg_vals[1] != 0 else NC
+                    state[var] = res
+                else:
+                    state[var] = NC
+            else:
+                state[var] = NC
+    return state
+
+class ConstantPropagation:
+    def __init__(self, cfg, blocks):
+        self.cfg = cfg
+        self.blocks = blocks
+        self.blocks_dict = {block[0]["label"]: block for block in blocks}
+        self.gen_sets = {block[0]["label"]: transfer_block(block, {}) for block in blocks}
+
+    def merge(self, maps):
+        return merge_maps(maps)
+
+    def transfer(self, block_label, in_map):
+        block = self.blocks_dict[block_label]
+        return transfer_block(block, in_map)
+
+    def analyze(self):
+        solver = DataFlowSolver(
+            cfg=self.cfg,
+            direction="forward",
+            merge=self.merge,
+            transfer=self.transfer,
+            initial={},
+            gen_sets=self.gen_sets
+        )
+        return solver.solve()
 
 def format_set(data):
     return ", ".join(sorted(data)) if data else "∅"
@@ -154,7 +225,20 @@ def print_analysis_results(block_labels, in_sets, out_sets):
         print(f"  out: {format_set(out_sets.get(label, set()))}")
     print("\n")
 
-# ------------------ Main Execution ------------------
+def format_const_map(mapping):
+    if not mapping:
+        return "∅"
+    items = []
+    for var, val in sorted(mapping.items()):
+        items.append(f"{var} = {val}")
+    return ", ".join(items)
+
+def print_constant_results(block_labels, in_sets, out_sets):
+    for label in block_labels:
+        print(f"{label}:")
+        print(f"  in:  {format_const_map(in_sets.get(label, {}))}")
+        print(f"  out: {format_const_map(out_sets.get(label, {}))}")
+    print("\n")
 
 def main():
     if len(sys.argv) < 3:
@@ -170,7 +254,6 @@ def main():
     for function in bril_program.get("functions", []):
         blocks = form_basic_blocks(function["instrs"])
         cfg_raw = build_cfg(blocks)
-        # Build a CFG that holds both successors and predecessors.
         cfg = {label: {"succs": list(cfg_raw[label]), "preds": []} for label in cfg_raw}
         for label, succs in cfg_raw.items():
             for succ in succs:
@@ -182,21 +265,28 @@ def main():
         for label, data in cfg.items():
             print(f"{label}: {data}")
 
-        # Get the block labels in the order they appear.
         block_labels = [block[0]["label"] for block in blocks]
 
         if analysis_type == "reaching-definitions":
+            from df import ReachingDefinitions
             print("\nReaching Definitions Analysis \n")
             analysis = ReachingDefinitions(cfg, blocks)
+            in_sets, out_sets = analysis.analyze()
+            print_analysis_results(block_labels, in_sets, out_sets)
         elif analysis_type == "live":
+            from df import LiveVariables
             print("\nLive Variables Analysis \n")
             analysis = LiveVariables(cfg, blocks)
+            in_sets, out_sets = analysis.analyze()
+            print_analysis_results(block_labels, in_sets, out_sets)
+        elif analysis_type == "constant":
+            print("\nConstant Propagation Analysis \n")
+            analysis = ConstantPropagation(cfg, blocks)
+            in_sets, out_sets = analysis.analyze()
+            print_constant_results(block_labels, in_sets, out_sets)
         else:
-            print("Unknown analysis type. Use 'reaching-definitions' or 'live'.")
+            print("Unknown analysis type. Use 'reaching-definitions', 'live', or 'constant'.")
             sys.exit(1)
-
-        in_sets, out_sets = analysis.analyze()
-        print_analysis_results(block_labels, in_sets, out_sets)
 
 if __name__ == "__main__":
     main()
