@@ -27,9 +27,8 @@ def intersect_idom(x, y, idom, postorder_index):
             y = idom[y]
     return x
 
-def compute_idom_classic(cfg, entry, dominators):
-    idom = {}
-    idom[entry] = entry
+def compute_idom(cfg, entry, dominators):
+    idom = {entry: entry}
     for b in cfg:
         if b != entry:
             idom[b] = None
@@ -67,23 +66,47 @@ def find_all_paths(cfg, start, end, path=None):
     return paths
 
 def verify_dominators(cfg, entry, dominators):
-    print("\n-- Verifying Dominators Naively --")
     for b in cfg:
         for d in dominators[b]:
             all_paths = find_all_paths(cfg, entry, b)
             if any(d not in p for p in all_paths):
-                print(f"ERROR: {d} not on every path from {entry} to {b}!")
                 return False
-    print("Dominator verification passed!")
     return True
+
+def ensure_unique_entry(cfg, entry_block, block_labels):
+    external_preds = [p for p in cfg[entry_block]["preds"] if p < entry_block]
+    if not external_preds:
+        return entry_block
+    new_block = max(cfg.keys()) + 1
+    cfg[new_block] = {"succs": [entry_block], "preds": []}
+    block_labels[new_block] = ".uentry"
+    for p in external_preds:
+        if entry_block in cfg[p]["succs"]:
+            cfg[p]["succs"].remove(entry_block)
+            if new_block not in cfg[p]["succs"]:
+                cfg[p]["succs"].append(new_block)
+    remaining = [p for p in cfg[entry_block]["preds"] if p >= entry_block]
+    cfg[entry_block]["preds"] = remaining + [new_block]
+    return new_block
+
+def print_tree_viz(root, dom_tree, block_labels, prefix="", is_tail=True):
+    label = block_labels.get(root, f".blk{root}")
+    connector = "└── " if is_tail else "├── "
+    print(prefix + connector + label)
+    children = sorted(dom_tree.get(root, []))
+    for i, child in enumerate(children):
+        last_child = (i == len(children) - 1)
+        new_prefix = prefix + ("    " if is_tail else "│   ")
+        print_tree_viz(child, dom_tree, block_labels, new_prefix, last_child)
 
 class Dominators:
     def __init__(self, cfg, entry):
         self.cfg = cfg
         self.entry = entry
         self.dominators = self.compute_full_dominators()
-        self.idom = compute_idom_classic(cfg, entry, self.dominators)
+        self.idom = compute_idom(cfg, entry, self.dominators)
         self.dom_tree = self.build_dominator_tree()
+        self.dom_frontier = self.compute_dominance_frontier()
 
     def compute_full_dominators(self):
         all_blocks = set(self.cfg.keys())
@@ -113,31 +136,28 @@ class Dominators:
                 tree[parent].append(b)
         return dict(tree)
 
-def ensure_unique_entry(cfg, entry_block, block_labels):
-    if not cfg[entry_block]["preds"]:
-        return entry_block
-    new_block = max(cfg.keys()) + 1
-    cfg[new_block] = {"succs": [entry_block], "preds": []}
-    block_labels[new_block] = ".uentry"
-    old_preds = cfg[entry_block]["preds"]
-    cfg[entry_block]["preds"] = [new_block]
-    for p in old_preds:
-        if entry_block in cfg[p]["succs"]:
-            cfg[p]["succs"].remove(entry_block)
-    return new_block
-
-def print_tree_viz(root, dom_tree, block_labels, prefix="", is_tail=True, is_root=True):
-    if is_root:
-        print(block_labels.get(root, f".blk{root}"))
-    else:
-        connector = "└── " if is_tail else "├── "
-        print(prefix + connector + block_labels.get(root, f".blk{root}"))
-
-    children = sorted(dom_tree.get(root, []))
-    for i, child in enumerate(children):
-        last_child = (i == len(children) - 1)
-        new_prefix = prefix + ("    " if (is_tail or is_root) else "│   ")
-        print_tree_viz(child, dom_tree, block_labels, new_prefix, last_child, is_root=False)
+    def compute_dominance_frontier(self):
+        DF = defaultdict(set)
+        tree_children = self.dom_tree
+        for x in self.cfg:
+            DF[x] = set()
+        for x in self.cfg:
+            for s in self.cfg[x]["succs"]:
+                if self.idom[s] != x:
+                    DF[x].add(s)
+        for x in self.cfg:
+            for p in self.cfg[x]["preds"]:
+                if p != x and x in self.dominators[p]:
+                    DF[x].add(x)
+                    break
+        def dfs_df(x):
+            for c in tree_children.get(x, []):
+                dfs_df(c)
+                for y in DF[c]:
+                    if self.idom[y] != x:
+                        DF[x].add(y)
+        dfs_df(self.entry)
+        return dict(DF)
 
 def main():
     if len(sys.argv) < 2:
@@ -145,7 +165,6 @@ def main():
     bril_file = sys.argv[1]
     with open(bril_file, "r") as f:
         prog = json.load(f)
-
     for func in prog.get("functions", []):
         blocks = form_basic_blocks(func['instrs'])
         raw_cfg = build_cfg(blocks)
@@ -166,17 +185,19 @@ def main():
         entry_block = min(cfg.keys())
         entry_block = ensure_unique_entry(cfg, entry_block, block_labels)
         doms = Dominators(cfg, entry_block)
-
-        print("\nDominator Sets:")
+        print("\n-- Dominator Sets -- ")
         for b in sorted(cfg.keys()):
             dom_set = sorted(doms.dominators[b])
             names = [block_labels[d] for d in dom_set]
             print(f"Block {block_labels.get(b, f'.blk{b}')}: {', '.join(names)}")
-
-        verify_dominators(cfg, entry_block, doms.dominators)
-
-        print("\n--  Dominance Tree -- ")
+        print("\n-- Dominance Tree -- ")
         print_tree_viz(entry_block, doms.dom_tree, block_labels)
+        print("\n-- Dominance Frontier --")
+        for x in sorted(cfg.keys()):
+            frontier = sorted(doms.dom_frontier[x])
+            f_labels = [block_labels[y] for y in frontier]
+            x_label = block_labels.get(x, f".blk{x}")
+            print(f"{x_label}: {', '.join(f_labels) if f_labels else '∅'}")
 
 if __name__ == "__main__":
     main()
